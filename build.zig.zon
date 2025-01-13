@@ -1,0 +1,29 @@
+.{
+    .name = "cmake-bootstrapper",
+
+    .version = "0.0.0",
+
+    .dependencies = .{
+        .cmake_src = .{
+            .url = "git+https://gitlab.kitware.com/cmake/cmake.git#1c52e53ca42e0a05ece9082af5222126f4ec5cd9",
+            .hash = "12205ae5afa6f017d4f4f4b555f9f6a2b0f623017cbdebf32efde824fddc5e75c286",
+        },
+        .kwsys_features_detector = .{
+            .path = "kwsys_features_detector",
+        },
+        .libuv = .{
+            .url = "git+https://github.com/vspefs/ayc-libuv#6215488cb8286a68990fcb6d4ff96add344ee8d5",
+            .hash = "12202a1b7d567fc50eb87a55a57357da167b81febc3bf3e4e07165ef13ceddc54f5e",
+        },
+        .jsoncpp = .{
+            .url = "git+https://github.com/vspefs/ayc-jsoncpp#c0a20f7610b45289d338b9edab9b171c30c2cf8e",
+            .hash = "1220f3342782ec52c89a294a19c737890db4fba9547526cf3f4e3af80885e3517ec6",
+        },
+    },
+
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
