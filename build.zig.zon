@@ -24,6 +24,9 @@
     .paths = .{
         "build.zig",
         "build.zig.zon",
-        "src",
+        "cmake.zig",
+        "utils.zig",
+        "kwsys_features_detector",
+        "LICENSE",
     },
 }
