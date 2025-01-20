@@ -19,106 +19,8 @@ pub fn build(b: *std.Build) !void {
     const dep = b.dependency("cmake_src", .{});
 
     // ---- setup related files ---- //
-    {
-        try b.build_root.handle.deleteTree("bootstrap");
-        try b.build_root.handle.makeDir("bootstrap");
-
-        try b.build_root.handle.deleteTree("tools");
-        var tools = try b.build_root.handle.makeOpenPath("tools", .{});
-        defer tools.close();
-
-        if (builtin.os.tag != .windows) {
-            const zig_cc = try tools.createFile("cc", .{});
-            defer zig_cc.close();
-            try zig_cc.writeAll(try std.fmt.allocPrint(alloc,
-                \\#!/bin/sh
-                \\{s} cc "$@"
-            , .{b.graph.zig_exe}));
-            try zig_cc.chmod(0o777);
-
-            const zig_cxx = try tools.createFile("c++", .{});
-            defer zig_cxx.close();
-            try zig_cxx.writeAll(try std.fmt.allocPrint(alloc,
-                \\#!/bin/sh
-                \\{s} c++ "$@"
-            , .{b.graph.zig_exe}));
-            try zig_cxx.chmod(0o777);
-
-            const zig_ar = try tools.createFile("ar", .{});
-            defer zig_ar.close();
-            try zig_ar.writeAll(try std.fmt.allocPrint(alloc,
-                \\#!/bin/sh
-                \\{s} ar "$@"
-            , .{b.graph.zig_exe}));
-            try zig_ar.chmod(0o777);
-
-            const zig_rc = try tools.createFile("rc", .{});
-            defer zig_rc.close();
-            try zig_rc.writeAll(try std.fmt.allocPrint(alloc,
-                \\#!/bin/sh
-                \\{s} rc "$@"
-            , .{b.graph.zig_exe}));
-            try zig_rc.chmod(0o777);
-        } else {
-            const zig_cc = try tools.createFile("cc.bat", .{});
-            defer zig_cc.close();
-            try zig_cc.writeAll(try std.fmt.allocPrint(alloc,
-                \\@echo off
-                \\{s} cc %*
-            , .{b.graph.zig_exe}));
-
-            const zig_cxx = try tools.createFile("c++.bat", .{});
-            defer zig_cxx.close();
-            try zig_cxx.writeAll(try std.fmt.allocPrint(alloc,
-                \\@echo off
-                \\{s} c++ %*
-            , .{b.graph.zig_exe}));
-
-            const zig_ar = try tools.createFile("ar.bat", .{});
-            defer zig_ar.close();
-            try zig_ar.writeAll(try std.fmt.allocPrint(alloc,
-                \\@echo off
-                \\{s} ar %*
-            , .{b.graph.zig_exe}));
-
-            const zig_rc = try tools.createFile("rc.bat", .{});
-            defer zig_rc.close();
-            try zig_rc.writeAll(try std.fmt.allocPrint(alloc,
-                \\@echo off
-                \\{s} rc %*
-            , .{b.graph.zig_exe}));
-        }
-
-        const cache_file = try b.build_root.handle.createFile("bootstrap_cache.cmake", .{});
-        defer cache_file.close();
-        try cache_file.writeAll(blk: {
-            const cache_str = try std.fmt.allocPrint(alloc,
-                \\set(CMAKE_C_LINKER_DEPFILE_SUPPORTED OFF CACHE BOOL "someday needs it, bro." FORCE)
-                \\set(CMAKE_CXX_LINKER_DEPFILE_SUPPORTED OFF CACHE BOOL "someday needs it, bro." FORCE)
-                \\set(CMAKE_C_COMPILER "{s}" CACHE PATH "" FORCE)
-                \\set(CMAKE_C_FLAGS "{s}" CACHE STRING "" FORCE)
-                \\set(CMAKE_CXX_COMPILER "{s}" CACHE PATH "" FORCE)
-                \\set(CMAKE_CXX_FLAGS "{s}" CACHE STRING "" FORCE)
-                \\set(CMAKE_AR "{s}" CACHE PATH "" FORCE)
-                \\set(CMAKE_RC_COMPILER "{s}" CACHE PATH "" FORCE)
-                \\set(CMAKE_INSTALL_PREFIX "{s}" CACHE PATH "" FORCE)
-                \\set(CMAKE_DATA_DIR "share/cmake" CACHE PATH "" FORCE)
-                \\set(CMAKE_BUILD_TYPE "Release" CACHE STRING "") # "not FORCE to preserve defaults specified elsewhere", according to original CMake bootstrap script
-            , .{
-                try b.build_root.handle.realpathAlloc(alloc, if (builtin.os.tag != .windows) "tools/cc" else "tools/cc.bat"),
-                "-fno-sanitize=undefined -D_FILE_OFFSET_BITS=64",
-                try b.build_root.handle.realpathAlloc(alloc, if (builtin.os.tag != .windows) "tools/c++" else "tools/c++.bat"),
-                "-fno-sanitize=undefined -D_FILE_OFFSET_BITS=64",
-                try b.build_root.handle.realpathAlloc(alloc, if (builtin.os.tag != .windows) "tools/ar" else "tools/ar.bat"),
-                try b.build_root.handle.realpathAlloc(alloc, if (builtin.os.tag != .windows) "tools/rc" else "tools/rc.bat"),
-                b.install_path,
-            });
-            if (target.result.os.tag == .windows) {
-                _ = posixifySlashes(cache_str);
-            }
-            break :blk cache_str;
-        });
-    }
+    var proj_cache = try ProjCacher.init(alloc, b, target);
+    defer proj_cache.deinit();
 
     // ---- gathering information ---- //
 
@@ -370,7 +272,7 @@ pub fn build(b: *std.Build) !void {
         basic_args,
         &.{
             posixifySlashes(try std.fmt.allocPrint(alloc, "-DCMAKE_BOOTSTRAP_SOURCE_DIR=\"{s}\"", .{getDependencyAbsolutePath(dep.path("."))})),
-            posixifySlashes(try std.fmt.allocPrint(alloc, "-DCMAKE_BOOTSTRAP_BINARY_DIR=\"{s}\"", .{try std.fs.path.join(alloc, &.{ b.install_path, "bin" })})),
+            posixifySlashes(try std.fmt.allocPrint(alloc, "-DCMAKE_BOOTSTRAP_BINARY_DIR=\"{s}\"", .{try std.fs.path.join(alloc, &.{ try proj_cache.out.realpathAlloc(alloc, "."), "bin" })})),
             "-DCMAKE_BOOTSTRAP_NINJA",
             "-DCMAKE_BOOTSTRAP",
         },
@@ -754,20 +656,42 @@ pub fn build(b: *std.Build) !void {
 
     const bootstrap = b.addRunArtifact(cmake_1_exe);
     bootstrap.addDirectoryArg(dep.path("."));
-    bootstrap.addPrefixedFileArg("-C", b.path("bootstrap_cache.cmake"));
+    bootstrap.addArg(try std.fmt.allocPrint(b.allocator, "-C{s}", .{try proj_cache.tools.realpathAlloc(alloc, "bootstrap_cache.cmake")}));
     bootstrap.addArg("-GNinja");
     bootstrap.addArg("-DCMAKE_BOOTSTRAP=1");
-    bootstrap.setCwd(b.path("bootstrap"));
+    bootstrap.setCwd(b.path(".proj-cache/bootstrap"));
 
     const bootstrap_make = b.addSystemCommand(&.{ "ninja", "-j12" });
-    bootstrap_make.setCwd(b.path("bootstrap"));
+    bootstrap_make.setCwd(b.path(".proj-cache/bootstrap"));
     bootstrap_make.step.dependOn(&bootstrap.step);
 
     const bootstrap_install = b.addSystemCommand(&.{ "ninja", "-j12", "install" });
-    bootstrap_install.setCwd(b.path("bootstrap"));
+    bootstrap_install.setCwd(b.path(".proj-cache/bootstrap"));
     bootstrap_install.step.dependOn(&bootstrap_make.step);
 
-    b.default_step.dependOn(&bootstrap_install.step);
+    const zig_install = b.addInstallDirectory(.{
+        .source_dir = b.path(".proj-cache/out"),
+        .install_dir = .prefix,
+        .install_subdir = "",
+    });
+
+    b.addNamedLazyPath("out", b.path(".proj-cache/out"));
+    if (not_built: {
+        proj_cache.out.access("bin/cmake", .{}) catch |err| {
+            if (err == error.FileNotFound) {
+                break :not_built true;
+            } else {
+                return err;
+            }
+        };
+        break :not_built false;
+    }) {
+        b.getInstallStep().dependOn(&bootstrap_install.step);
+        zig_install.step.dependOn(&bootstrap_install.step);
+    }
+    if (b.option(bool, "zig_out", "install built CMake to standard zig-out directory (default: false)") orelse false) {
+        b.getInstallStep().dependOn(&zig_install.step);
+    }
 }
 
 fn getDependencyAbsolutePath(path: std.Build.LazyPath) []const u8 {
@@ -782,6 +706,136 @@ fn posixifySlashes(str: []u8) []u8 {
     }
     return str;
 }
+
+const ProjCacher = struct {
+    root: std.fs.Dir,
+    tools: std.fs.Dir,
+    bootstrap: std.fs.Dir,
+    out: std.fs.Dir,
+
+    pub fn init(allocator: std.mem.Allocator, builder: *std.Build, target: std.Build.ResolvedTarget) !ProjCacher {
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+
+        const root = blk: {
+            const path = try std.fs.path.join(alloc, &.{ try builder.build_root.handle.realpathAlloc(alloc, "."), ".proj-cache" });
+            break :blk try builder.build_root.handle.makeOpenPath(path, .{});
+        };
+        const bootstrap = try root.makeOpenPath("bootstrap", .{});
+        const out = try root.makeOpenPath("out", .{});
+        const tools = blk: {
+            try root.deleteTree("tools");
+            const dir = try root.makeOpenPath("tools", .{});
+            if (builtin.os.tag != .windows) {
+                const zig_cc = try dir.createFile("cc", .{});
+                defer zig_cc.close();
+                try zig_cc.writeAll(try std.fmt.allocPrint(alloc,
+                    \\#!/bin/sh
+                    \\{s} cc "$@"
+                , .{builder.graph.zig_exe}));
+                try zig_cc.chmod(0o777);
+
+                const zig_cxx = try dir.createFile("c++", .{});
+                defer zig_cxx.close();
+                try zig_cxx.writeAll(try std.fmt.allocPrint(alloc,
+                    \\#!/bin/sh
+                    \\{s} c++ "$@"
+                , .{builder.graph.zig_exe}));
+                try zig_cxx.chmod(0o777);
+
+                const zig_ar = try dir.createFile("ar", .{});
+                defer zig_ar.close();
+                try zig_ar.writeAll(try std.fmt.allocPrint(alloc,
+                    \\#!/bin/sh
+                    \\{s} ar "$@"
+                , .{builder.graph.zig_exe}));
+                try zig_ar.chmod(0o777);
+
+                const zig_rc = try dir.createFile("rc", .{});
+                defer zig_rc.close();
+                try zig_rc.writeAll(try std.fmt.allocPrint(alloc,
+                    \\#!/bin/sh
+                    \\{s} rc "$@"
+                , .{builder.graph.zig_exe}));
+                try zig_rc.chmod(0o777);
+            } else {
+                const zig_cc = try dir.createFile("cc.bat", .{});
+                defer zig_cc.close();
+                try zig_cc.writeAll(try std.fmt.allocPrint(alloc,
+                    \\@echo off
+                    \\{s} cc %*
+                , .{builder.graph.zig_exe}));
+
+                const zig_cxx = try dir.createFile("c++.bat", .{});
+                defer zig_cxx.close();
+                try zig_cxx.writeAll(try std.fmt.allocPrint(alloc,
+                    \\@echo off
+                    \\{s} c++ %*
+                , .{builder.graph.zig_exe}));
+
+                const zig_ar = try dir.createFile("ar.bat", .{});
+                defer zig_ar.close();
+                try zig_ar.writeAll(try std.fmt.allocPrint(alloc,
+                    \\@echo off
+                    \\{s} ar %*
+                , .{builder.graph.zig_exe}));
+
+                const zig_rc = try dir.createFile("rc.bat", .{});
+                defer zig_rc.close();
+                try zig_rc.writeAll(try std.fmt.allocPrint(alloc,
+                    \\@echo off
+                    \\{s} rc %*
+                , .{builder.graph.zig_exe}));
+            }
+
+            const cmake_cache = try dir.createFile("bootstrap_cache.cmake", .{});
+            defer cmake_cache.close();
+            try cmake_cache.writeAll(cache: {
+                const cache_str = try std.fmt.allocPrint(alloc,
+                    \\set(CMAKE_C_LINKER_DEPFILE_SUPPORTED OFF CACHE BOOL "someday needs it, bro." FORCE)
+                    \\set(CMAKE_CXX_LINKER_DEPFILE_SUPPORTED OFF CACHE BOOL "someday needs it, bro." FORCE)
+                    \\set(CMAKE_C_COMPILER "{s}" CACHE PATH "" FORCE)
+                    \\set(CMAKE_C_FLAGS "{s}" CACHE STRING "" FORCE)
+                    \\set(CMAKE_CXX_COMPILER "{s}" CACHE PATH "" FORCE)
+                    \\set(CMAKE_CXX_FLAGS "{s}" CACHE STRING "" FORCE)
+                    \\set(CMAKE_AR "{s}" CACHE PATH "" FORCE)
+                    \\set(CMAKE_RC_COMPILER "{s}" CACHE PATH "" FORCE)
+                    \\set(CMAKE_INSTALL_PREFIX "{s}" CACHE PATH "" FORCE)
+                    \\set(CMAKE_DATA_DIR "share/cmake" CACHE PATH "" FORCE)
+                    \\set(CMAKE_BUILD_TYPE "Release" CACHE STRING "") # "not FORCE to preserve defaults specified elsewhere", according to original CMake bootstrap script
+                , .{
+                    try dir.realpathAlloc(alloc, if (builtin.os.tag != .windows) "cc" else "cc.bat"),
+                    "-fno-sanitize=undefined -D_FILE_OFFSET_BITS=64",
+                    try dir.realpathAlloc(alloc, if (builtin.os.tag != .windows) "c++" else "c++.bat"),
+                    "-fno-sanitize=undefined -D_FILE_OFFSET_BITS=64",
+                    try dir.realpathAlloc(alloc, if (builtin.os.tag != .windows) "ar" else "ar.bat"),
+                    try dir.realpathAlloc(alloc, if (builtin.os.tag != .windows) "rc" else "rc.bat"),
+                    try out.realpathAlloc(alloc, "."),
+                });
+                if (target.result.os.tag == .windows) {
+                    _ = posixifySlashes(cache_str);
+                }
+                break :cache cache_str;
+            });
+
+            break :blk dir;
+        };
+
+        return ProjCacher{
+            .root = root,
+            .tools = tools,
+            .bootstrap = bootstrap,
+            .out = out,
+        };
+    }
+    pub fn deinit(self: *ProjCacher) void {
+        self.root.close();
+        self.tools.close();
+        self.bootstrap.close();
+        self.out.close();
+    }
+};
 
 const ArrayList = std.ArrayList;
 const ConfigHeader = std.Build.Step.ConfigHeader;

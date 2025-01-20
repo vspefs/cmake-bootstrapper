@@ -4,6 +4,4 @@ zig-out
 .idea
 .DS_Store
 
-tools/
-bootstrap/
-bootstrap_cache.cmake
+.proj-cache/
