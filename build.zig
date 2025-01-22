@@ -689,9 +689,7 @@ pub fn build(b: *std.Build) !void {
         b.getInstallStep().dependOn(&bootstrap_install.step);
         zig_install.step.dependOn(&bootstrap_install.step);
     }
-    if (b.option(bool, "zig_out", "install built CMake to standard zig-out directory (default: false)") orelse false) {
-        b.getInstallStep().dependOn(&zig_install.step);
-    }
+    b.getInstallStep().dependOn(&zig_install.step);
 }
 
 fn getDependencyAbsolutePath(path: std.Build.LazyPath) []const u8 {
